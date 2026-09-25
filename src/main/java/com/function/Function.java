@@ -4,6 +4,11 @@ import java.sql.Connection;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.util.Optional;
+import com.azure.core.credential.AzureKeyCredential;
+import com.azure.core.util.BinaryData;
+import com.azure.messaging.eventgrid.EventGridEvent;
+import com.azure.messaging.eventgrid.EventGridPublisherClient;
+import com.azure.messaging.eventgrid.EventGridPublisherClientBuilder;
 import com.microsoft.azure.functions.ExecutionContext;
 import com.microsoft.azure.functions.HttpMethod;
 import com.microsoft.azure.functions.HttpRequestMessage;
@@ -124,7 +129,6 @@ public class Function {
         try {
 
             String nombreRol = obtenerValor(json, "nombreRol");
-
             String estado = obtenerValor(json, "estado");
 
             if (nombreRol == null || nombreRol.isBlank()) {
@@ -284,7 +288,6 @@ public class Function {
         try {
 
             String nombreRol = obtenerValor(json, "nombreRol");
-
             String estado = obtenerValor(json, "estado");
 
             if (nombreRol == null || nombreRol.isBlank()) {
@@ -324,6 +327,15 @@ public class Function {
 
                 connection.commit();
 
+                /*
+                 * ================================================== PUBLICAR EVENTO RolCreado
+                 * ==================================================
+                 *
+                 * El evento se publica solamente después de que Oracle confirmó correctamente la
+                 * transacción.
+                 */
+                publicarEventoRolCreado(nombreRol, estado, context);
+
                 String response = """
                         {
                             "mensaje": "Rol creado correctamente",
@@ -345,6 +357,44 @@ public class Function {
             return request.createResponseBuilder(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body("No fue posible crear el rol.").build();
         }
+    }
+
+    /**
+     * ================================================== EVENTO RolCreado
+     * ==================================================
+     */
+    private void publicarEventoRolCreado(String nombreRol, String estado,
+            ExecutionContext context) {
+
+        String endpoint = System.getenv("EVENT_GRID_TOPIC_ENDPOINT");
+
+        String accessKey = System.getenv("EVENT_GRID_ACCESS_KEY");
+
+        if (endpoint == null || endpoint.isBlank()) {
+            throw new IllegalStateException("EVENT_GRID_TOPIC_ENDPOINT no está configurado.");
+        }
+
+        if (accessKey == null || accessKey.isBlank()) {
+            throw new IllegalStateException("EVENT_GRID_ACCESS_KEY no está configurado.");
+        }
+
+        String eventData = String.format("""
+                {
+                    "nombreRol": "%s",
+                    "estado": "%s"
+                }
+                """, nombreRol, estado);
+
+        EventGridEvent evento = new EventGridEvent("/veterinaria/roles", "RolCreado",
+                BinaryData.fromString(eventData), "1.0");
+
+        EventGridPublisherClient<EventGridEvent> client = new EventGridPublisherClientBuilder()
+                .endpoint(endpoint).credential(new AzureKeyCredential(accessKey))
+                .buildEventGridEventPublisherClient();
+
+        client.sendEvent(evento);
+
+        context.getLogger().info("Evento RolCreado publicado correctamente en Event Grid.");
     }
 
     /**
